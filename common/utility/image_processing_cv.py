@@ -198,6 +198,65 @@ def get_single_patch_sample(img_path, center_x, center_y, width, height
 
     return img_patch, label, label_weight
 
+def get_single_patch_sample_inference(img_path, center_x, center_y, width, height
+                                        , joints, joints_vis
+                                        , flip_pairs, parent_ids
+                                        , patch_width, patch_height, rect_3d_width, rect_3d_height, mean, std
+                                        , do_augment, aug_config
+                                        , label_func, label_config
+                                        , depth_in_image=False, DEBUG=False):
+    # 1. load image
+    cvimg = cv2.imread(img_path, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    if not isinstance(cvimg, np.ndarray):
+        raise IOError("Fail to read %s" % img_path)
+
+    img_height, img_width, img_channels = cvimg.shape
+
+    # 2. get augmentation params
+    if do_augment:
+        scale, rot, do_flip, color_scale = do_augmentation(aug_config)
+    else:
+        scale, rot, do_flip, color_scale = 1.0, 0, False, [1.0, 1.0, 1.0]
+
+    # 3. generate image patch
+    img_patch_cv, trans = generate_patch_image_cv(cvimg, center_x, center_y, width, height, patch_width, patch_height,
+                                                  do_flip, scale, rot)
+    img_patch = convert_cvimg_to_tensor(img_patch_cv)
+
+    # apply normalization
+    for n_c in range(img_channels):
+        img_patch[n_c, :, :] = np.clip(img_patch[n_c, :, :] * color_scale[n_c], 0, 255)
+        if mean is not None and std is not None:
+            img_patch[n_c, :, :] = (img_patch[n_c, :, :] - mean[n_c]) / std[n_c]
+
+    # 4. generate patch joint ground truth
+    # flip joints and apply Affine Transform on joints
+    # if do_flip:
+    #     joints, joints_vis = fliplr_joints(joints, joints_vis, img_width, flip_pairs)
+
+    # if depth_in_image == 'org_img':
+    #     assert do_augment == False
+    #     for n_jt in range(len(joints)):
+    #         joints[n_jt, 0] = joints[n_jt, 0] / rect_3d_width * patch_width + patch_width / 2.0
+    #         joints[n_jt, 1] = joints[n_jt, 1] / rect_3d_height * patch_height + patch_height / 2.0
+    #         joints[n_jt, 2] = joints[n_jt, 2] / rect_3d_width * patch_width
+    # else:
+    for n_jt in range(len(joints)):
+        joints[n_jt, 0:2] = trans_point2d(joints[n_jt, 0:2], trans)
+        if depth_in_image:
+            joints[n_jt, 2] = joints[n_jt, 2] / (width * scale) * patch_width
+        else:
+            joints[n_jt, 2] = joints[n_jt, 2] / (rect_3d_width * scale) * patch_width
+
+    if DEBUG:
+        debug_vis_patch(img_patch_cv, joints, joints_vis, flip_pairs, parent_ids, patch_width, patch_height)
+
+    # 5. get label of some type according to certain need
+    # label, label_weight = label_func(label_config, patch_width, patch_height, joints, joints_vis)
+
+    return img_patch
+
+
 def multi_meshgrid(*args):
     """
     Creates a meshgrid from possibly many
